@@ -158,7 +158,7 @@ public sealed class DocumentResolverFunction
                 return null;
             }
 
-            var driveId = GetJsonString(fields, "DriveId");
+            var driveId = GetJsonString(fields, "DriveID");
             var fileName = GetJsonString(fields, "FileLeafRef");
             if (string.IsNullOrWhiteSpace(fileName))
             {
