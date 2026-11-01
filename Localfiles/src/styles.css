@@ -1,0 +1,252 @@
+:root {
+    font-family: Inter, 'Segoe UI', sans-serif;
+    color: #10233b;
+    background: #f4f6fb;
+    line-height: 1.5;
+    font-weight: 400;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    margin: 0;
+    min-height: 100%;
+    min-width: 100%;
+}
+
+body {
+    margin: 0;
+    background: linear-gradient(180deg, #eef4ff 0%, #f7f8fb 100%);
+}
+
+button,
+a {
+    font: inherit;
+}
+
+.app-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.app-header,
+.app-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 2rem;
+    background: #0d2b4d;
+    color: #f3f7ff;
+}
+
+.brand-block {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+}
+
+.brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #5aa8ff, #2d6cdf);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+.brand-copy {
+    display: flex;
+    flex-direction: column;
+}
+
+.brand-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+
+.brand-copy small {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.token-pill {
+    padding: 0.45rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    font-size: 0.8rem;
+}
+
+.download-button {
+    border: none;
+    border-radius: 12px;
+    background: #f7b955;
+    color: #10233b;
+    font-weight: 700;
+    padding: 0.7rem 1.1rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+}
+
+.download-button:hover {
+    opacity: 0.9;
+}
+
+.app-content {
+    flex: 1;
+    padding: 2rem;
+}
+
+.document-panel {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(16, 35, 59, 0.08);
+    border-radius: 18px;
+    box-shadow: 0 18px 45px rgba(18, 40, 80, 0.08);
+    overflow: hidden;
+}
+
+.document-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.5rem 1.5rem 0;
+}
+
+.document-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 1rem 1.5rem 0;
+}
+
+.document-picker-button {
+    border: 1px solid rgba(16, 35, 59, 0.12);
+    background: #f2f5fb;
+    color: #10233b;
+    border-radius: 999px;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.document-picker-button.active {
+    background: #0d2b4d;
+    border-color: #0d2b4d;
+    color: #fff;
+}
+
+.eyebrow {
+    margin: 0 0 0.2rem;
+    color: #5e6d84;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.document-header-row h1 {
+    margin: 0;
+    font-size: clamp(1.4rem, 2vw, 2.2rem);
+    color: #10233b;
+}
+
+.document-badge {
+    background: #ebf3ff;
+    color: #1d4c97;
+    padding: 0.55rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.viewer-wrap {
+    height: 760px;
+    padding: 1rem 1.5rem 1.5rem;
+}
+
+#react-doc-viewer {
+    border-radius: 14px;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid rgba(16, 35, 59, 0.08);
+}
+
+.unsupported-message {
+    display: grid;
+    place-items: center;
+    min-height: 320px;
+    text-align: center;
+    color: #10233b;
+    background: #f8f9fc;
+    padding: 2rem;
+}
+
+.unsupported-message h3 {
+    margin: 0 0 0.5rem;
+}
+
+.unsupported-message p {
+    margin: 0 0 0.75rem;
+    max-width: 520px;
+    color: #5b6d85;
+}
+
+.app-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.95rem;
+}
+
+.app-footer a {
+    color: #dce8ff;
+    text-decoration: none;
+}
+
+.app-footer a:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+
+    .app-header,
+    .app-footer,
+    .document-header-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header-actions {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .app-content {
+        padding: 1rem;
+    }
+
+    .viewer-wrap {
+        height: 560px;
+        padding: 0.75rem 0.75rem 0.9rem;
+    }
+}

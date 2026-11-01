@@ -1,0 +1,323 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using Azure.Core;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+using Azure.Storage.Sas;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace DocumentViewer.Functions;
+
+public sealed class DocumentResolverFunction
+{
+    private readonly ILogger<DocumentResolverFunction> _logger;
+    private readonly IConfiguration _configuration;
+    private readonly HttpClient _httpClient;
+
+    private static readonly IReadOnlyDictionary<string, DocumentReference> DemoTokens =
+        new Dictionary<string, DocumentReference>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["demo-doc"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf"),
+            ["demo-docx"] = new("HighLevelAgentScriptFlow.docx", "http://localhost:3000/HighLevelAgentScriptFlow.docx"),
+            ["demo-pptx"] = new("sample.pptx", "http://localhost:3000/sample.pptx"),
+            ["demo-pdf"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf")
+        };
+
+    public DocumentResolverFunction(
+        ILogger<DocumentResolverFunction> logger,
+        IConfiguration configuration,
+        HttpClient httpClient)
+    {
+        _logger = logger;
+        _configuration = configuration;
+        _httpClient = httpClient;
+    }
+
+    [Function("GetDocumentUrl")]
+    public async Task<HttpResponseData> Run(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "document")] HttpRequestData req)
+    {
+        var response = req.CreateResponse();
+        var token = req.Query["token"];
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            response.StatusCode = HttpStatusCode.BadRequest;
+            await response.WriteStringAsync("{\"status\":\"missing_token\"}");
+            response.Headers.Add("Content-Type", "application/json");
+            return response;
+        }
+
+        try
+        {
+            var documentReference = await ResolveDocumentReferenceAsync(token);
+
+            if (documentReference is null)
+            {
+                response.StatusCode = HttpStatusCode.NotFound;
+                await response.WriteStringAsync("{\"status\":\"token_not_found\"}");
+                response.Headers.Add("Content-Type", "application/json");
+                return response;
+            }
+
+            using var payloadStream = await DownloadDocumentStreamAsync(documentReference);
+            var publicDocumentUrl = await BuildTemporaryPublicUrlAsync(documentReference.FileName, payloadStream);
+
+            var payload = new
+            {
+                status = "ok",
+                token,
+                fileName = documentReference.FileName,
+                uri = publicDocumentUrl,
+                source = string.Equals(documentReference.SourceUrl, publicDocumentUrl, StringComparison.OrdinalIgnoreCase) ? "direct" : "temporary"
+            };
+
+            response.StatusCode = HttpStatusCode.OK;
+            response.Headers.Add("Content-Type", "application/json");
+            await response.WriteStringAsync(JsonSerializer.Serialize(payload));
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Document resolution failed for token {Token}", token);
+            response.StatusCode = HttpStatusCode.InternalServerError;
+            await response.WriteStringAsync("{\"status\":\"document_unavailable\"}");
+            response.Headers.Add("Content-Type", "application/json");
+            return response;
+        }
+    }
+
+    private async Task<DocumentReference?> ResolveDocumentReferenceAsync(string token)
+    {
+        if (IsSharePointConfigured())
+        {
+            var sharePointDocument = await ResolveDocumentFromSharePointAsync(token);
+            if (sharePointDocument is not null)
+            {
+                return sharePointDocument;
+            }
+        }
+
+        if (DemoTokens.TryGetValue(token, out var demoDocument))
+        {
+            return demoDocument;
+        }
+
+        return null;
+    }
+
+    private async Task<DocumentReference?> ResolveDocumentFromSharePointAsync(string token)
+    {
+        try
+        {
+            var tenantId = _configuration["SharePointTenantId"];
+            var clientId = _configuration["SharePointClientId"];
+            var clientSecret = _configuration["SharePointClientSecret"];
+            var siteId = _configuration["SharePointSiteId"];
+            var listId = _configuration["SharePointListId"];
+
+            if (string.IsNullOrWhiteSpace(tenantId)
+                || string.IsNullOrWhiteSpace(clientId)
+                || string.IsNullOrWhiteSpace(clientSecret)
+                || string.IsNullOrWhiteSpace(siteId)
+                || string.IsNullOrWhiteSpace(listId))
+            {
+                return null;
+            }
+
+            var tokenCredential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+            var accessToken = await tokenCredential.GetTokenAsync(new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" }));
+
+            var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists/{listId}/items?$expand=fields&$filter=fields/AccessToke eq '{EscapeODataFilterValue(token)}'");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
+
+            using var listResponse = await _httpClient.SendAsync(request);
+            if (!listResponse.IsSuccessStatusCode)
+            {
+                var errorText = await listResponse.Content.ReadAsStringAsync();
+                _logger.LogWarning("SharePoint token lookup failed: {StatusCode} {Reason} {Response}", listResponse.StatusCode, listResponse.ReasonPhrase, errorText);
+                return null;
+            }
+
+            var listPayload = await listResponse.Content.ReadAsStringAsync();
+            using var jsonDocument = JsonDocument.Parse(listPayload);
+            if (!jsonDocument.RootElement.TryGetProperty("value", out var valueArray) || valueArray.ValueKind != JsonValueKind.Array || valueArray.GetArrayLength() == 0)
+            {
+                return null;
+            }
+
+            var item = valueArray[0];
+            if (!item.TryGetProperty("fields", out var fields))
+            {
+                return null;
+            }
+
+            var fileName = GetJsonString(fields, "FileName");
+            var path = GetJsonString(fields, "Path");
+            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            return new DocumentReference(fileName, path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SharePoint document lookup failed for token {Token}", token);
+            return null;
+        }
+    }
+
+    private async Task<Stream> DownloadDocumentStreamAsync(DocumentReference documentReference)
+    {
+        if (IsSharePointConfigured())
+        {
+            try
+            {
+                var tenantId = _configuration["SharePointTenantId"];
+                var clientId = _configuration["SharePointClientId"];
+                var clientSecret = _configuration["SharePointClientSecret"];
+                var siteId = _configuration["SharePointSiteId"];
+
+                if (!string.IsNullOrWhiteSpace(tenantId)
+                    && !string.IsNullOrWhiteSpace(clientId)
+                    && !string.IsNullOrWhiteSpace(clientSecret)
+                    && !string.IsNullOrWhiteSpace(siteId))
+                {
+                    var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+                    var accessToken = await credential.GetTokenAsync(new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" }));
+                    var relativePath = NormalizeSharePointRelativePath(documentReference.SourceUrl);
+                    var request = new HttpRequestMessage(
+                        HttpMethod.Get,
+                        $"https://graph.microsoft.com/v1.0/sites/{siteId}:{relativePath}:/content");
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
+
+                    using var response = await _httpClient.SendAsync(request);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var bytes = await response.Content.ReadAsByteArrayAsync();
+                        return new MemoryStream(bytes);
+                    }
+
+                    var errorText = await response.Content.ReadAsStringAsync();
+                    _logger.LogWarning("SharePoint file download failed: {StatusCode} {Reason} {Response}", response.StatusCode, response.ReasonPhrase, errorText);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SharePoint file download failed for {FileName}", documentReference.FileName);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(documentReference.SourceUrl))
+        {
+            using var sourceResponse = await _httpClient.GetAsync(documentReference.SourceUrl, HttpCompletionOption.ResponseHeadersRead);
+            sourceResponse.EnsureSuccessStatusCode();
+            return new MemoryStream(await sourceResponse.Content.ReadAsByteArrayAsync());
+        }
+
+        throw new InvalidOperationException($"No downloadable source available for {documentReference.FileName}");
+    }
+
+    private async Task<string> BuildTemporaryPublicUrlAsync(string fileName, Stream documentStream)
+    {
+        var blobConnectionString = _configuration["BlobStorageConnectionString"];
+        var blobContainerName = _configuration["BlobContainerName"];
+
+        if (string.IsNullOrWhiteSpace(blobConnectionString) || string.IsNullOrWhiteSpace(blobContainerName))
+        {
+            return fileName;
+        }
+
+        try
+        {
+            var blobServiceClient = new BlobServiceClient(blobConnectionString);
+            var containerClient = blobServiceClient.GetBlobContainerClient(blobContainerName);
+            await containerClient.CreateIfNotExistsAsync();
+
+            var blobName = GetSafeBlobName(fileName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            documentStream.Position = 0;
+            await blobClient.UploadAsync(documentStream, overwrite: true);
+
+            var sasBuilder = new BlobSasBuilder
+            {
+                BlobContainerName = blobContainerName,
+                BlobName = blobName,
+                Resource = "b",
+                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-1),
+                ExpiresOn = DateTimeOffset.UtcNow.AddMinutes(15),
+                Protocol = SasProtocol.Https
+            };
+            sasBuilder.SetPermissions(BlobSasPermissions.Read);
+
+            var sasUri = blobClient.GenerateSasUri(sasBuilder);
+            return sasUri.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Blob temp URL generation failed for {FileName}", fileName);
+            return fileName;
+        }
+    }
+
+    private static bool IsSharePointConfigured()
+    {
+        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointTenantId"))
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointClientId"))
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointClientSecret"));
+    }
+
+    private static string EscapeODataFilterValue(string value)
+    {
+        return value.Replace("'", "''");
+    }
+
+    private static string GetJsonString(JsonElement parent, string propertyName)
+    {
+        if (parent.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
+        {
+            return property.GetString();
+        }
+
+        return string.Empty;
+    }
+
+    private static string GetSafeBlobName(string fileName)
+    {
+        var safeName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeName))
+        {
+            return $"document-{Guid.NewGuid():N}.bin";
+        }
+
+        return safeName.Replace(' ', '-');
+    }
+
+    private static string NormalizeSharePointRelativePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var sanitized = path.Trim();
+        if (sanitized.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || sanitized.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            var uri = new Uri(sanitized);
+            sanitized = uri.AbsolutePath;
+        }
+
+        sanitized = sanitized.TrimStart('/');
+        return sanitized;
+    }
+
+    private sealed record DocumentReference(string FileName, string SourceUrl);
+}

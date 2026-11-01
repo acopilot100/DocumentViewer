@@ -1,0 +1,29 @@
+[
+  {
+    "name": "GetDocumentUrl",
+    "scriptFile": "DocumentViewer_Functions.dll",
+    "entryPoint": "DocumentViewer.Functions.DocumentResolverFunction.Run",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Anonymous",
+        "methods": [
+          "get"
+        ],
+        "route": "document",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  }
+]
