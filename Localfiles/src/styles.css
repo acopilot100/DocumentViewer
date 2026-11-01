@@ -194,7 +194,7 @@ a {
 }
 
 #react-doc-viewer,
-#react-doc-viewer > div,
+#react-doc-viewer>div,
 #react-doc-viewer #msdoc-renderer,
 #react-doc-viewer #msdoc-iframe {
     height: 100%;
