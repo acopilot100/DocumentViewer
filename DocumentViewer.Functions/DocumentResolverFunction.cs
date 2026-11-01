@@ -316,7 +316,7 @@ public sealed class DocumentResolverFunction
         }
 
         sanitized = sanitized.TrimStart('/');
-        return sanitized;
+        return sanitized.Length == 0 ? string.Empty : "/" + sanitized;
     }
 
     private sealed record DocumentReference(string FileName, string SourceUrl);
