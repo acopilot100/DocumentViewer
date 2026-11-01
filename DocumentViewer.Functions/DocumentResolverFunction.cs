@@ -21,10 +21,10 @@ public sealed class DocumentResolverFunction
     private static readonly IReadOnlyDictionary<string, DocumentReference> DemoTokens =
         new Dictionary<string, DocumentReference>(StringComparer.OrdinalIgnoreCase)
         {
-            ["demo-doc"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf"),
-            ["demo-docx"] = new("HighLevelAgentScriptFlow.docx", "http://localhost:3000/HighLevelAgentScriptFlow.docx"),
-            ["demo-pptx"] = new("sample.pptx", "http://localhost:3000/sample.pptx"),
-            ["demo-pdf"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf")
+            ["demo-doc"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf", string.Empty),
+            ["demo-docx"] = new("HighLevelAgentScriptFlow.docx", "http://localhost:3000/HighLevelAgentScriptFlow.docx", string.Empty),
+            ["demo-pptx"] = new("sample.pptx", "http://localhost:3000/sample.pptx", string.Empty),
+            ["demo-pdf"] = new("Designer_AI_Tagging.pdf", "http://localhost:3000/Designer_AI_Tagging.pdf", string.Empty)
         };
 
     public DocumentResolverFunction(
@@ -158,14 +158,32 @@ public sealed class DocumentResolverFunction
                 return null;
             }
 
-            var fileName = GetJsonString(fields, "FileName");
-            var path = GetJsonString(fields, "Path");
-            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(path))
+            var driveId = GetJsonString(fields, "DriveId");
+            var fileName = GetJsonString(fields, "FileLeafRef");
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                fileName = GetJsonString(fields, "FileName");
+            }
+
+            var path = GetJsonString(fields, "FileRef");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                path = GetJsonString(fields, "Path");
+            }
+
+            _logger.LogInformation(
+                "SharePoint list item resolved: token={Token}, driveId={DriveId}, fileName={FileName}, fileRef={FileRef}",
+                token,
+                driveId,
+                fileName,
+                path);
+
+            if (string.IsNullOrWhiteSpace(fileName) || string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(driveId))
             {
                 return null;
             }
 
-            return new DocumentReference(fileName, path);
+            return new DocumentReference(fileName, path, driveId);
         }
         catch (Exception ex)
         {
@@ -192,21 +210,48 @@ public sealed class DocumentResolverFunction
                 {
                     var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
                     var accessToken = await credential.GetTokenAsync(new TokenRequestContext(new[] { "https://graph.microsoft.com/.default" }));
-                    var relativePath = NormalizeSharePointRelativePath(documentReference.SourceUrl);
-                    var request = new HttpRequestMessage(
-                        HttpMethod.Get,
-                        $"https://graph.microsoft.com/v1.0/sites/{siteId}:{relativePath}:/content");
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
 
-                    using var response = await _httpClient.SendAsync(request);
-                    if (response.IsSuccessStatusCode)
+                    if (!string.IsNullOrWhiteSpace(documentReference.DriveId))
                     {
-                        var bytes = await response.Content.ReadAsByteArrayAsync();
+                        var relativePath = GetDriveRelativePath(documentReference.SourceUrl);
+                        var driveUrl = $"https://graph.microsoft.com/v1.0/drives/{documentReference.DriveId}/root:/{relativePath}:/content";
+
+                        _logger.LogInformation(
+                            "SharePoint drive download: driveId={DriveId}, sourceUrl={SourceUrl}, relativePath={RelativePath}, requestUrl={RequestUrl}",
+                            documentReference.DriveId,
+                            documentReference.SourceUrl,
+                            relativePath,
+                            driveUrl);
+
+                        var request = new HttpRequestMessage(HttpMethod.Get, driveUrl);
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
+
+                        using var response = await _httpClient.SendAsync(request);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var bytes = await response.Content.ReadAsByteArrayAsync();
+                            return new MemoryStream(bytes);
+                        }
+
+                        var errorText = await response.Content.ReadAsStringAsync();
+                        _logger.LogWarning("SharePoint drive download failed: {StatusCode} {Reason} {Response}", response.StatusCode, response.ReasonPhrase, errorText);
+                    }
+
+                    var relativeSitePath = NormalizeSharePointRelativePath(documentReference.SourceUrl);
+                    var siteRequest = new HttpRequestMessage(
+                        HttpMethod.Get,
+                        $"https://graph.microsoft.com/v1.0/sites/{siteId}:{relativeSitePath}:/content");
+                    siteRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken.Token);
+
+                    using var siteResponse = await _httpClient.SendAsync(siteRequest);
+                    if (siteResponse.IsSuccessStatusCode)
+                    {
+                        var bytes = await siteResponse.Content.ReadAsByteArrayAsync();
                         return new MemoryStream(bytes);
                     }
 
-                    var errorText = await response.Content.ReadAsStringAsync();
-                    _logger.LogWarning("SharePoint file download failed: {StatusCode} {Reason} {Response}", response.StatusCode, response.ReasonPhrase, errorText);
+                    var siteErrorText = await siteResponse.Content.ReadAsStringAsync();
+                    _logger.LogWarning("SharePoint file download failed: {StatusCode} {Reason} {Response}", siteResponse.StatusCode, siteResponse.ReasonPhrase, siteErrorText);
                 }
             }
             catch (Exception ex)
@@ -284,7 +329,7 @@ public sealed class DocumentResolverFunction
     {
         if (parent.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String)
         {
-            return property.GetString();
+            return property.GetString() ?? string.Empty;
         }
 
         return string.Empty;
@@ -315,9 +360,51 @@ public sealed class DocumentResolverFunction
             sanitized = uri.AbsolutePath;
         }
 
-        sanitized = sanitized.TrimStart('/');
-        return sanitized.Length == 0 ? string.Empty : "/" + sanitized;
+        sanitized = sanitized.Replace('\\', '/');
+        var segments = sanitized
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(Uri.EscapeDataString);
+
+        var encoded = string.Join("/", segments);
+        return string.IsNullOrEmpty(encoded) ? string.Empty : "/" + encoded;
     }
 
-    private sealed record DocumentReference(string FileName, string SourceUrl);
+    private static string GetDriveRelativePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var sanitized = path.Trim();
+        if (sanitized.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || sanitized.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            var uri = new Uri(sanitized);
+            sanitized = uri.AbsolutePath;
+        }
+
+        sanitized = sanitized.Replace('\\', '/');
+        var segments = sanitized
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+
+        if (segments.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (segments[0].Equals("sites", StringComparison.OrdinalIgnoreCase))
+        {
+            segments = segments.Skip(2).ToArray();
+        }
+
+        if (segments.Length > 0)
+        {
+            segments = segments.Skip(1).ToArray();
+        }
+
+        return string.Join("/", segments.Select(Uri.EscapeDataString));
+    }
+
+    private sealed record DocumentReference(string FileName, string SourceUrl, string DriveId);
 }
