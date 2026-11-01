@@ -193,6 +193,24 @@ a {
     border: 1px solid rgba(16, 35, 59, 0.08);
 }
 
+#react-doc-viewer,
+#react-doc-viewer > div,
+#react-doc-viewer #msdoc-renderer,
+#react-doc-viewer #msdoc-iframe {
+    height: 100%;
+}
+
+#react-doc-viewer #msdoc-renderer {
+    display: flex;
+    flex-direction: column;
+}
+
+#react-doc-viewer #msdoc-iframe {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 100%;
+}
+
 .unsupported-message {
     display: grid;
     place-items: center;
