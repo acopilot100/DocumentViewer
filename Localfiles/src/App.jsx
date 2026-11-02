@@ -20,12 +20,19 @@ const getFallbackDocuments = () => [
 export default function App() {
     const token = getTokenFromQueryString();
     const functionBaseUrl = import.meta.env.VITE_FUNCTION_BASE_URL || '';
-    const [documents, setDocuments] = useState(getFallbackDocuments());
-    const [activeDocument, setActiveDocument] = useState(getFallbackDocuments()[0]);
-    const [isLoading, setIsLoading] = useState(false);
+    const [documents, setDocuments] = useState(() => token ? [] : getFallbackDocuments());
+    const [activeDocument, setActiveDocument] = useState(() => token ? undefined : getFallbackDocuments()[0]);
+    const [isLoading, setIsLoading] = useState(Boolean(token));
+    const [resolveError, setResolveError] = useState('');
 
     useEffect(() => {
-        if (!token || !functionBaseUrl) {
+        if (!token) {
+            return;
+        }
+
+        if (!functionBaseUrl) {
+            setResolveError('The document service URL is not configured.');
+            setIsLoading(false);
             return;
         }
 
@@ -33,6 +40,7 @@ export default function App() {
 
         const resolveDocumentFromFunction = async () => {
             setIsLoading(true);
+            setResolveError('');
 
             try {
                 const response = await fetch(
@@ -48,15 +56,28 @@ export default function App() {
 
                 const data = await response.json();
 
-                if (cancelled || !data?.uri) {
+                if (cancelled) {
                     return;
                 }
 
-                const resolvedDocuments = [{ uri: data.uri, fileName: data.fileName || 'document' }];
+                if (!data?.uri) {
+                    throw new Error('The document service did not return a document URL.');
+                }
+
+                const fileName = data.fileName || 'document';
+                const isPdf = /\.pdf$/i.test(fileName) || /\.pdf$/i.test(new URL(data.uri, window.location.origin).pathname);
+                const resolvedDocuments = [{
+                    uri: data.uri,
+                    fileName,
+                    ...(isPdf ? { fileType: 'pdf' } : {}),
+                }];
                 setDocuments(resolvedDocuments);
                 setActiveDocument(resolvedDocuments[0]);
             } catch (error) {
                 console.error('Unable to resolve document from Azure Function:', error);
+                if (!cancelled) {
+                    setResolveError('Unable to resolve this document. Please check the link or contact the document owner.');
+                }
             } finally {
                 if (!cancelled) {
                     setIsLoading(false);
@@ -102,7 +123,7 @@ export default function App() {
                     <span className="token-pill">
                         {isLoading ? 'Resolving document...' : token ? 'Secure token session' : 'Demo session'}
                     </span>
-                    <button type="button" className="download-button" onClick={handleDownload}>
+                    <button type="button" className="download-button" onClick={handleDownload} disabled={!activeDocument?.uri}>
                         Download
                     </button>
                 </div>
@@ -138,7 +159,11 @@ export default function App() {
                     </div>
 
                     <div className="viewer-wrap">
-                        <DocViewer
+                        {isLoading ? (
+                            <p role="status">Resolving document...</p>
+                        ) : resolveError ? (
+                            <p role="alert">{resolveError}</p>
+                        ) : <DocViewer
                             documents={documents}
                             activeDocument={activeDocument}
                             onDocumentChange={setActiveDocument}
@@ -159,7 +184,7 @@ export default function App() {
                                 },
                             }}
                             style={{ width: '100%', height: '100%' }}
-                        />
+                        />}
                     </div>
                 </section>
             </main>
