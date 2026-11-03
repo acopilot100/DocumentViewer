@@ -3,8 +3,6 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
-using Azure.Storage.Blobs;
-using Azure.Storage.Sas;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Configuration;
@@ -17,6 +15,7 @@ public sealed class DocumentResolverFunction
     private readonly ILogger<DocumentResolverFunction> _logger;
     private readonly IConfiguration _configuration;
     private readonly HttpClient _httpClient;
+    private readonly DocumentBlobStorage _blobStorage;
 
     private static readonly IReadOnlyDictionary<string, DocumentReference> DemoTokens =
         new Dictionary<string, DocumentReference>(StringComparer.OrdinalIgnoreCase)
@@ -30,11 +29,13 @@ public sealed class DocumentResolverFunction
     public DocumentResolverFunction(
         ILogger<DocumentResolverFunction> logger,
         IConfiguration configuration,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        DocumentBlobStorage blobStorage)
     {
         _logger = logger;
         _configuration = configuration;
         _httpClient = httpClient;
+        _blobStorage = blobStorage;
     }
 
     [Function("GetDocumentUrl")]
@@ -65,7 +66,7 @@ public sealed class DocumentResolverFunction
             }
 
             using var payloadStream = await DownloadDocumentStreamAsync(documentReference);
-            var publicDocumentUrl = await BuildTemporaryPublicUrlAsync(documentReference.FileName, payloadStream);
+            var publicDocumentUrl = await _blobStorage.UploadAsync(documentReference.FileName, payloadStream);
 
             var payload = new
             {
@@ -270,54 +271,30 @@ public sealed class DocumentResolverFunction
         throw new InvalidOperationException($"No downloadable source available for {documentReference.FileName}");
     }
 
-    private async Task<string> BuildTemporaryPublicUrlAsync(string fileName, Stream documentStream)
+    private bool IsSharePointConfigured()
     {
-        var blobConnectionString = _configuration["BlobStorageConnectionString"];
-        var blobContainerName = _configuration["BlobContainerName"];
-
-        if (string.IsNullOrWhiteSpace(blobConnectionString) || string.IsNullOrWhiteSpace(blobContainerName))
+        string[] settings =
+        [
+            "SharePointTenantId", "SharePointClientId", "SharePointClientSecret",
+            "SharePointSiteId", "SharePointListId"
+        ];
+        if (!settings.Any(setting => !string.IsNullOrWhiteSpace(_configuration[setting])))
         {
-            return fileName;
+            return false;
         }
 
-        try
+        foreach (var setting in settings)
         {
-            var blobServiceClient = new BlobServiceClient(blobConnectionString);
-            var containerClient = blobServiceClient.GetBlobContainerClient(blobContainerName);
-            await containerClient.CreateIfNotExistsAsync();
-
-            var blobName = GetSafeBlobName(fileName);
-            var blobClient = containerClient.GetBlobClient(blobName);
-
-            documentStream.Position = 0;
-            await blobClient.UploadAsync(documentStream, overwrite: true);
-
-            var sasBuilder = new BlobSasBuilder
+            var value = _configuration[setting];
+            if (string.IsNullOrWhiteSpace(value))
             {
-                BlobContainerName = blobContainerName,
-                BlobName = blobName,
-                Resource = "b",
-                StartsOn = DateTimeOffset.UtcNow.AddMinutes(-1),
-                ExpiresOn = DateTimeOffset.UtcNow.AddMinutes(15),
-                Protocol = SasProtocol.Https
-            };
-            sasBuilder.SetPermissions(BlobSasPermissions.Read);
+                throw new InvalidOperationException($"SharePoint is partially configured: {setting} is required.");
+            }
 
-            var sasUri = blobClient.GenerateSasUri(sasBuilder);
-            return sasUri.ToString();
+            DocumentBlobStorage.EnsureSecretResolved(value, setting);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Blob temp URL generation failed for {FileName}", fileName);
-            return fileName;
-        }
-    }
 
-    private static bool IsSharePointConfigured()
-    {
-        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointTenantId"))
-            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointClientId"))
-            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SharePointClientSecret"));
+        return true;
     }
 
     private static string EscapeODataFilterValue(string value)
@@ -333,17 +310,6 @@ public sealed class DocumentResolverFunction
         }
 
         return string.Empty;
-    }
-
-    private static string GetSafeBlobName(string fileName)
-    {
-        var safeName = Path.GetFileName(fileName);
-        if (string.IsNullOrWhiteSpace(safeName))
-        {
-            return $"document-{Guid.NewGuid():N}.bin";
-        }
-
-        return safeName.Replace(' ', '-');
     }
 
     private static string NormalizeSharePointRelativePath(string path)
