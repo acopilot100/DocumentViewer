@@ -1,0 +1,11 @@
+@baseUrl = http://localhost:7080
+@token = demo-pdf
+
+### Return file bytes with inline Content-Disposition (replace token for SharePoint)
+GET {{baseUrl}}/api/document/content?token={{token}}
+
+### Missing token: 400
+GET {{baseUrl}}/api/document/content
+
+### Unknown token: 404
+GET {{baseUrl}}/api/document/content?token=unknown

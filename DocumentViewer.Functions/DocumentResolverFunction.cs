@@ -39,8 +39,16 @@ public sealed class DocumentResolverFunction
     }
 
     [Function("GetDocumentUrl")]
-    public async Task<HttpResponseData> Run(
+    public Task<HttpResponseData> Run(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "document")] HttpRequestData req)
+        => ResolveDocumentAsync(req, inline: false);
+
+    [Function("GetDocumentContent")]
+    public Task<HttpResponseData> RunContent(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "document/content")] HttpRequestData req)
+        => ResolveDocumentAsync(req, inline: true);
+
+    private async Task<HttpResponseData> ResolveDocumentAsync(HttpRequestData req, bool inline)
     {
         var response = req.CreateResponse();
         var token = req.Query["token"];
@@ -66,6 +74,18 @@ public sealed class DocumentResolverFunction
             }
 
             using var payloadStream = await DownloadDocumentStreamAsync(documentReference);
+            if (inline)
+            {
+                var disposition = new Microsoft.Net.Http.Headers.ContentDispositionHeaderValue("inline");
+                disposition.SetHttpFileName(documentReference.FileName);
+
+                await payloadStream.CopyToAsync(response.Body);
+                response.StatusCode = HttpStatusCode.OK;
+                response.Headers.Add("Content-Type", GetContentType(documentReference.FileName));
+                response.Headers.Add("Content-Disposition", disposition.ToString());
+                return response;
+            }
+
             var publicDocumentUrl = await _blobStorage.UploadAsync(documentReference.FileName, payloadStream);
 
             var payload = new
@@ -90,6 +110,21 @@ public sealed class DocumentResolverFunction
             response.Headers.Add("Content-Type", "application/json");
             return response;
         }
+    }
+
+    internal static string GetContentType(string fileName)
+    {
+        return Path.GetExtension(fileName.ToLowerInvariant()) switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".html" => "text/html",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            _ => "application/octet-stream"
+        };
     }
 
     private async Task<DocumentReference?> ResolveDocumentReferenceAsync(string token)

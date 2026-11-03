@@ -6,6 +6,12 @@ Provide a branded, browser-based document portal where a recipient opens a token
 
 The React SPA provides the user interface. The Azure Function resolves the token against a SharePoint list, retrieves the associated file through Microsoft Graph, copies it into Azure Blob Storage, and returns a read-only SAS URL valid for 15 minutes.
 
+For the POC, `GET /api/document/content?token=...` offers an alternative response:
+the same lookup and retrieval return raw file bytes with inline disposition and
+an extension-based MIME type, without a Blob upload or SAS URL. The SPA continues
+to use the original `/api/document` route. See the [deployment guide](Azure-Deploy-Guide.md#poc-inline-content-endpoint)
+for supported MIME types and browser limitations.
+
 ## High-level flow
 
 ```mermaid

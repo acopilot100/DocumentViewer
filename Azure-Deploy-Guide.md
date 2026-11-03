@@ -5,6 +5,40 @@ This project contains:
 - React SPA in `Localfiles`
 - Azure Function in `DocumentViewer.Functions`
 
+### POC inline-content endpoint
+
+`GET /api/document/content?token=<token>` uses the same token lookup and
+SharePoint download as `/api/document`, but returns the original file bytes
+directly instead of uploading a Blob or returning a URL. The existing SPA
+and `/api/document` endpoint are unchanged.
+
+The response has `Content-Disposition: inline; filename=...` (with safe filename
+encoding) and a `Content-Type` determined from the lowercased filename extension:
+
+| Extension | Content-Type |
+| --- | --- |
+| `.pdf` | `application/pdf` |
+| `.jpg`, `.jpeg` | `image/jpeg` |
+| `.png` | `image/png` |
+| `.html` | `text/html` |
+| `.docx` | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
+| `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+| `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
+| Other / no extension | `application/octet-stream` |
+
+The original filename casing is preserved in the disposition header. Missing
+tokens return 400, unknown tokens return 404, and retrieval exceptions return
+500 with the existing JSON status format. Demo tokens still work when SharePoint
+is disabled; local sample files must be served on port 3000.
+Example requests are in `DocumentViewer.Functions/DocumentContent.http`.
+
+This is a basic, buffered POC response, not a range-enabled streaming endpoint.
+An inline header requests display but does not add browser support for Office
+files; a browser may download them instead. Only serve trusted HTML, as inline
+HTML executes under the Function origin. The existing Function dependency
+registration still requires Blob client configuration even though this route
+does not upload files.
+
 ## 1) Create Azure resources in the portal
 
 Create these resources in Azure:
