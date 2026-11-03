@@ -26,8 +26,13 @@ encoding) and a `Content-Type` determined from the lowercased filename extension
 | `.pptx` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
 | Other / no extension | `application/octet-stream` |
 
-The original filename casing is preserved in the disposition header. Missing
-tokens return 400, unknown tokens return 404, and retrieval exceptions return
+The original filename casing is preserved in the disposition header.
+The Function sets status and headers before writing file bytes so the HTTP
+response does not start before the headers are applied.
+The expected PowerPoint headers are `Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation`
+and `Content-Disposition: inline; filename=...`.
+
+Missing tokens return 400, unknown tokens return 404, and retrieval exceptions return
 500 with the existing JSON status format. Demo tokens still work when SharePoint
 is disabled; local sample files must be served on port 3000.
 Example requests are in `DocumentViewer.Functions/DocumentContent.http`.

@@ -56,8 +56,8 @@ public sealed class DocumentResolverFunction
         if (string.IsNullOrWhiteSpace(token))
         {
             response.StatusCode = HttpStatusCode.BadRequest;
-            await response.WriteStringAsync("{\"status\":\"missing_token\"}");
             response.Headers.Add("Content-Type", "application/json");
+            await response.WriteStringAsync("{\"status\":\"missing_token\"}");
             return response;
         }
 
@@ -68,8 +68,8 @@ public sealed class DocumentResolverFunction
             if (documentReference is null)
             {
                 response.StatusCode = HttpStatusCode.NotFound;
-                await response.WriteStringAsync("{\"status\":\"token_not_found\"}");
                 response.Headers.Add("Content-Type", "application/json");
+                await response.WriteStringAsync("{\"status\":\"token_not_found\"}");
                 return response;
             }
 
@@ -79,10 +79,10 @@ public sealed class DocumentResolverFunction
                 var disposition = new Microsoft.Net.Http.Headers.ContentDispositionHeaderValue("inline");
                 disposition.SetHttpFileName(documentReference.FileName);
 
-                await payloadStream.CopyToAsync(response.Body);
                 response.StatusCode = HttpStatusCode.OK;
                 response.Headers.Add("Content-Type", GetContentType(documentReference.FileName));
                 response.Headers.Add("Content-Disposition", disposition.ToString());
+                await payloadStream.CopyToAsync(response.Body);
                 return response;
             }
 
@@ -106,8 +106,8 @@ public sealed class DocumentResolverFunction
         {
             _logger.LogError(ex, "Document resolution failed for token {Token}", token);
             response.StatusCode = HttpStatusCode.InternalServerError;
-            await response.WriteStringAsync("{\"status\":\"document_unavailable\"}");
             response.Headers.Add("Content-Type", "application/json");
+            await response.WriteStringAsync("{\"status\":\"document_unavailable\"}");
             return response;
         }
     }
