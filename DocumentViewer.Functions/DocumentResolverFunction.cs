@@ -94,6 +94,7 @@ public sealed class DocumentResolverFunction
                 token,
                 fileName = documentReference.FileName,
                 uri = publicDocumentUrl,
+                thumbnailUrl = documentReference.ThumbnailUrl,
                 source = string.Equals(documentReference.SourceUrl, publicDocumentUrl, StringComparison.OrdinalIgnoreCase) ? "direct" : "temporary"
             };
 
@@ -219,11 +220,50 @@ public sealed class DocumentResolverFunction
                 return null;
             }
 
-            return new DocumentReference(fileName, path, driveId);
+            var thumbnailUrl = await GetSharePointThumbnailUrlAsync(driveId, path, accessToken.Token);
+
+            return new DocumentReference(fileName, path, driveId, thumbnailUrl);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "SharePoint document lookup failed for token {Token}", token);
+            return null;
+        }
+    }
+
+    private async Task<string?> GetSharePointThumbnailUrlAsync(string driveId, string path, string accessToken)
+    {
+        try
+        {
+            var relativePath = GetDriveRelativePath(path);
+            var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://graph.microsoft.com/v1.0/drives/{Uri.EscapeDataString(driveId)}/root:/{relativePath}:/thumbnails?select=medium");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            using var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("SharePoint thumbnail lookup failed: {StatusCode} {Reason} {Response}", response.StatusCode, response.ReasonPhrase, errorText);
+                return null;
+            }
+
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            if (json.RootElement.TryGetProperty("value", out var sets)
+                && sets.ValueKind == JsonValueKind.Array
+                && sets.GetArrayLength() > 0
+                && sets[0].TryGetProperty("medium", out var medium))
+            {
+                var url = GetJsonString(medium, "url");
+                return string.IsNullOrWhiteSpace(url) ? null : url;
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SharePoint thumbnail lookup failed for {Path}", path);
             return null;
         }
     }
@@ -407,5 +447,5 @@ public sealed class DocumentResolverFunction
         return string.Join("/", segments.Select(Uri.EscapeDataString));
     }
 
-    private sealed record DocumentReference(string FileName, string SourceUrl, string DriveId);
+    private sealed record DocumentReference(string FileName, string SourceUrl, string DriveId, string? ThumbnailUrl = null);
 }

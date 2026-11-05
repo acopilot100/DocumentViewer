@@ -24,6 +24,7 @@ export default function App() {
     const [activeDocument, setActiveDocument] = useState(() => token ? undefined : getFallbackDocuments()[0]);
     const [isLoading, setIsLoading] = useState(Boolean(token));
     const [resolveError, setResolveError] = useState('');
+    const [thumbnailUrl, setThumbnailUrl] = useState('');
 
     useEffect(() => {
         if (!token) {
@@ -73,6 +74,7 @@ export default function App() {
                 }];
                 setDocuments(resolvedDocuments);
                 setActiveDocument(resolvedDocuments[0]);
+                setThumbnailUrl(/^https:\/\//i.test(data.thumbnailUrl || '') ? data.thumbnailUrl : '');
             } catch (error) {
                 console.error('Unable to resolve document from Azure Function:', error);
                 if (!cancelled) {
@@ -120,6 +122,15 @@ export default function App() {
                 </div>
 
                 <div className="header-actions">
+                    {thumbnailUrl && (
+                        <img
+                            className="header-thumbnail"
+                            src={thumbnailUrl}
+                            alt={`Preview of ${activeDocument?.fileName || 'document'}`}
+                            referrerPolicy="no-referrer"
+                            onError={() => setThumbnailUrl('')}
+                        />
+                    )}
                     <span className="token-pill">
                         {isLoading ? 'Resolving document...' : token ? 'Secure token session' : 'Demo session'}
                     </span>
